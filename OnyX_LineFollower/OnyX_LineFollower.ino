@@ -1,7 +1,5 @@
 //..................................................................................................................Button Logic variables and pins
-#define NUM_BUTTONS 3
-const unsigned long longPressThreshold = 600;  // ms
-const unsigned long debounceDelay = 50;        // ms
+#include "Button.h"
 
 //..................................................................................................................Sensor definations and declarations
 #include <algorithm>
@@ -118,24 +116,6 @@ DirectionLibrary DL;  // single instance
 
 
 
-// --- Struct for button data ---
-struct Button {
-  int pin;
-  bool lastState;
-  bool pressed;
-  bool longPressFired;
-  unsigned long pressStartTime;
-};
-// --- Button array ---
-Button buttons[NUM_BUTTONS] = {
-  { 9, HIGH, false, false, 0 },
-  { 10, HIGH, false, false, 0 },
-  { 11, HIGH, false, false, 0 }
-};
-
-
-
-
 struct modeProfile {
   int maxSpeed;
   int baseSpeed;
@@ -237,9 +217,7 @@ void setup() {
   Serial.begin(115200);
 
   // --- Setup buttons ---
-  for (int i = 0; i < NUM_BUTTONS; i++) {
-    pinMode(buttons[i].pin, INPUT_PULLUP);
-  }
+  initButtons();
 
   // --- Start I2C and OLED ---
   Wire.begin(OLED_SDA, OLED_SCL);
@@ -404,64 +382,6 @@ void pressControl(modeProfile* profile) {
     profile->currentSlide = max(0, profile->noOfElements - 3);
 }
 
-
-
-//..................................................................................................................Button Checking Function
-int buttonCheck() {
-  for (int i = 0; i < NUM_BUTTONS; i++) {
-    bool currentState = digitalRead(buttons[i].pin);
-
-    // --- Button Pressed ---
-    if (currentState == LOW && buttons[i].lastState == HIGH) {
-      delay(debounceDelay);
-      if (digitalRead(buttons[i].pin) == LOW) {
-        buttons[i].pressStartTime = millis();
-        buttons[i].pressed = true;
-        buttons[i].longPressFired = false;
-      }
-    }
-
-    // --- While Holding ---
-    if (buttons[i].pressed && !buttons[i].longPressFired) {
-      unsigned long heldTime = millis() - buttons[i].pressStartTime;
-      if (heldTime >= longPressThreshold) {
-        buttons[i].longPressFired = true;
-        return 3 + i;  // long press event immediately
-      }
-    }
-
-    // --- Button Released ---
-    if (currentState == HIGH && buttons[i].lastState == LOW) {
-      delay(debounceDelay);
-      if (digitalRead(buttons[i].pin) == HIGH && buttons[i].pressed) {
-        unsigned long pressDuration = millis() - buttons[i].pressStartTime;
-        buttons[i].pressed = false;
-
-        if (!buttons[i].longPressFired && pressDuration < longPressThreshold)
-          return i;  // short press
-      }
-    }
-
-    buttons[i].lastState = currentState;
-  }
-
-  return -1;  // no event
-}
-
-
-
-
-//..................................................................................................................Button Printing Function
-void printButton(int result) {
-  if (result != -1) {
-    int btn = result % NUM_BUTTONS;
-    bool isLong = result >= 3;
-    Serial.print("Button ");
-    Serial.print(btn);
-    Serial.print(" -> ");
-    Serial.println(isLong ? "Long Press" : "Short Press");
-  }
-}
 
 
 
@@ -931,7 +851,7 @@ void emberIITBmodeStartPage() {
   }
   if (buttonStatus == 2) {
     // dryRunPage();
-    celibrationPage();
+    Serial.println("Celibrated");
   }
 }
 
