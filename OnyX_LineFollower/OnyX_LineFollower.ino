@@ -1,17 +1,11 @@
+#include "Sensor.h"
+
 //..................................................................................................................Button Logic variables and pins
 #include "Button.h"
 
 //..................................................................................................................Sensor definations and declarations
 #include <algorithm>
 
-#define s0 41
-#define s1 42
-#define s2 2
-#define s3 1
-#define sensorPin 19  // Analog input
-// --- Optimized multiplexer channel selector ---
-const uint8_t muxPins[4] = { s0, s1, s2, s3 };
-int lastMuxChannel = -1;  // remember the last selected channel
 
 
 //..................................................................................................................PWM Channel and Frequency Configuration
@@ -56,7 +50,7 @@ Adafruit_SSD1306 oled(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
 
 //.................................................................................................................Lawaris
-const uint8_t sensorCount = 16;
+// const uint8_t sensorCount = 16;
 int PositionMultiplyer[sensorCount - 1] = { -7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7 };
 float PositionMultiplyer14[sensorCount - 2] = { -6.5, -5.5, -4.5, -3.5, -2.5, -1.5, -0.5, 0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5 };
 
@@ -75,19 +69,6 @@ bool stopCondition = false;
 unsigned long stopConditionTimer = 0;
 bool stopConditionTimerStarted = false;
 int theCollector = 0;
-
-
-
-//Calibration Struct
-struct SensorCalibration {
-  float minCollector[sensorCount] = { 0 };      // Dark baseline (max ADC to start)
-  float maxCollector[sensorCount] = { 4095 };   // Bright baseline
-  float calibratedValues[sensorCount] = { 0 };  // Normalized values 0-1000
-  int midPoint = 2048;                          // Center threshold
-  float alpha = 0.1;                            // EMA smoothing factor
-  uint16_t calibrationDuration = 6000;
-};
-SensorCalibration sensorCal;
 
 
 
@@ -199,10 +180,8 @@ bool isDryRunDone = false;
 
 //.............................................................................................................................SETUP............................
 void setup() {
-  pinMode(s0, OUTPUT);
-  pinMode(s1, OUTPUT);
-  pinMode(s2, OUTPUT);
-  pinMode(s3, OUTPUT);
+  //Sensor initialisation
+  initSensors();
 
   // Motor direction pins
   pinMode(AIN1, OUTPUT);
@@ -469,21 +448,6 @@ void modeSelectPage() {
 
 
 
-void sensorCalibrate() {
-  for (int i = 0; i < sensorCount; i++) {
-    int temp = sensorRead(i);  // Your raw sensor reading function
-
-    if (temp > sensorCal.midPoint) {
-      sensorCal.maxCollector[i] = (1 - sensorCal.alpha) * sensorCal.maxCollector[i] + sensorCal.alpha * temp;
-    } else {
-      sensorCal.minCollector[i] = (1 - sensorCal.alpha) * sensorCal.minCollector[i] + sensorCal.alpha * temp;
-    }
-  }
-}
-
-
-
-
 void calibrationPage() {
   // Reinitialize min and max collectors to defaults for a fresh calibration
   for (int i = 0; i < sensorCount; i++) {
@@ -584,17 +548,6 @@ void speedModeStartPage() {
     while (buttonStatus != 4) {
       updateIRValues();
       findError01();
-      // if(pid.isOnWhite)
-      //   runForword(0, emberIITB.maxSpeed);
-      // else{
-      //   int edged = edging();
-      //   if(edged != 2){
-      //     runForword(-350, emberIITB.maxSpeed);
-      //   }
-      //   else
-      //     runForword(emberIITB.baseSpeed, emberIITB.maxSpeed);
-      // }
-      // runForword(emberIITB.baseSpeed, emberIITB.maxSpeed);
       if(pid.isOnWhite){
         if(millis()-lastBreaksOn>650){
           lastBreaksOn = millis();
@@ -900,61 +853,12 @@ void printGraph() {
 
 
 
-void updateIRValues() {
-  for (int i = 0; i < sensorCount; i++) {
-    sensorCal.calibratedValues[i] = readCalibrated(i);
-  }
-}
-
-
-
-// for white lines
-void updateIRValuesWhite() {
-  for (int i = 0; i < sensorCount; i++) {
-    sensorCal.calibratedValues[i] = 1000 - readCalibrated(i);
-  }
-}
-
-
-
-int sensorRead(int i) {
-  selectMuxChannel(i);  // Optimized multiplexer switching
-  return analogRead(sensorPin);
-}
-
-
-
-void selectMuxChannel(uint8_t channel) {
-  if (channel == lastMuxChannel) return;  // no change needed
-
-  uint8_t changedBits = lastMuxChannel ^ channel;  // find which bits changed
-
-  for (uint8_t bit = 0; bit < 4; bit++) {
-    if (changedBits & (1 << bit)) {
-      digitalWrite(muxPins[bit], (channel >> bit) & 1);
-    }
-  }
-
-  lastMuxChannel = channel;
-}
-
-
-
 void printCalibratedSensorValues() {
   for (int i = 0; i < sensorCount; i++) {
     Serial.print((1000-readCalibrated(i)));
     Serial.print("\t");
   }
   Serial.println();
-}
-
-
-
-int readCalibrated(int i) {
-  int tempHolder = sensorRead(i);
-  tempHolder = map(tempHolder, sensorCal.minCollector[i], sensorCal.maxCollector[i], 0, 1000);
-
-  return std::clamp(tempHolder, 0, 1000);  // Clamp the result
 }
 
 
@@ -1046,25 +950,5 @@ int edging() {
   }
   return 0;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
