@@ -69,6 +69,8 @@ bool stopCondition = false;
 unsigned long stopConditionTimer = 0;
 bool stopConditionTimerStarted = false;
 int theCollector = 0;
+bool stillOnWhite = false;
+int LowerThreshold = 300;
 
 
 
@@ -123,7 +125,7 @@ modeProfile emberIITB = {
 };
 
 modeProfile onyxSpeed = {
-  580, 375,                                  // PID and Stats
+  500, 400,                                  // PID and Stats
   1,                                          // modeNo
   0,                                          // Active Select
   4,                                          // number of UI elements
@@ -156,8 +158,8 @@ PID pid = {
   0,
   0,
   0,
-  0.1150,
-  0.0016,
+  0.10,//0.115
+  0.005,
   0.0,
   0.55,
   false,
@@ -549,16 +551,18 @@ void speedModeStartPage() {
       updateIRValues();
       findError01();
       if(pid.isOnWhite){
-        if(millis()-lastBreaksOn>650){
+        if((millis()-lastBreaksOn>650)&&!stillOnWhite){
+          stillOnWhite = true;
           lastBreaksOn = millis();
           theUltimateBreak();
-          delay(130);
+          delay(175);
         }
         runForword(0, onyxSpeed.maxSpeed);
       }
-      else
+      else{
+        stillOnWhite = false;
         runForword(onyxSpeed.baseSpeed, onyxSpeed.maxSpeed);
-
+      }
       if (buttonStatus == 0)
       {
         //overFlow = !overFlow;
@@ -577,41 +581,41 @@ void speedModeStartPage() {
       if(buttonStatus == 5){
         edgingCooldown = !edgingCooldown;
       }
-      if(!stopConditionTimerStarted && stopCondition){
-        stopConditionTimerStarted = !stopConditionTimerStarted;
-        stopConditionTimer = millis();
-        stopCondition = false;
-      }
-      if(stopConditionTimerStarted){
-        if(millis()- stopConditionTimer > 100){
-          theCollector = 0;
-          for(int i = 0; i<14; i++){
-            if(i<7)
-              theCollector += sensorCal.calibratedValues[i];
-            else
-              theCollector += sensorCal.calibratedValues[i+2];
-          }
-          if(theCollector >= 12500){
-            buttonStatus = buttonCheck();
-            delay(100);
-            theUltimateBreak();
-            delay(150);
-            stopMotion();
-            while((buttonStatus!=1)&&(buttonStatus!=4)){
-              buttonStatus = buttonCheck();
-              stopMotion();
-              // delay(20);
-            }
-            if(buttonStatus == 4){
-              stopConditionTimerStarted = false;
-              break;
-            }
-            else{
-              stopConditionTimerStarted = false;
-            }
-          }
-        }
-      }
+      // if(!stopConditionTimerStarted && stopCondition){
+      //   stopConditionTimerStarted = !stopConditionTimerStarted;
+      //   stopConditionTimer = millis();
+      //   stopCondition = false;
+      // }
+      // if(stopConditionTimerStarted){
+      //   if(millis()- stopConditionTimer > 100){
+      //     theCollector = 0;
+      //     for(int i = 0; i<14; i++){
+      //       if(i<7)
+      //         theCollector += sensorCal.calibratedValues[i];
+      //       else
+      //         theCollector += sensorCal.calibratedValues[i+2];
+      //     }
+      //     if(theCollector >= 12500){
+      //       buttonStatus = buttonCheck();
+      //       delay(100);
+      //       theUltimateBreak();
+      //       delay(150);
+      //       stopMotion();
+      //       while((buttonStatus!=1)&&(buttonStatus!=4)){
+      //         buttonStatus = buttonCheck();
+      //         stopMotion();
+      //         // delay(20);
+      //       }
+      //       if(buttonStatus == 4){
+      //         stopConditionTimerStarted = false;
+      //         break;
+      //       }
+      //       else{
+      //         stopConditionTimerStarted = false;
+      //       }
+      //     }
+      //   }
+      // }
       buttonStatus = buttonCheck();
     }
     stopMotion();
@@ -631,8 +635,8 @@ void theUltimateBreak(){
   digitalWrite(BIN2, LOW);
   // delay(50);
 
-  ledcWrite(PWMA, 450);
-  ledcWrite(PWMB, 450);
+  ledcWrite(PWMA, 280);
+  ledcWrite(PWMB, 280);
 }
 
 
@@ -640,17 +644,24 @@ void theUltimateBreak(){
 
 void runForword(int minSpeed, int maxSpeed) {
   pid.P = pid.Kp*pid.error;
-  if(abs(pid.error - pid.previousError) > 50){
-    unsigned long currentTime = micros();
-    double deltaTime = (currentTime - pid.previousTime) / 1000000.0;
-    double dError = (pid.error - pid.previousError) / deltaTime;
-    pid.D = pid.Kd*dError;
-    pid.previousError = pid.error;
-    pid.previousTime = currentTime;
-    // Serial.println(pid.D);
-  }
-  else
-    pid.D = 0;
+  unsigned long currentTime = micros();
+  float dt = (currentTime - pid.previousTime) * 1e-6;
+
+  // clamp dt (critical)
+  if (dt < 0.001) dt = 0.001;
+  if (dt > 0.02) dt = 0.02;
+
+  float rawD = (pid.error - pid.previousError) / dt;
+
+  // smooth derivative (low-pass filter)
+  pid.D = 0.7 * pid.D + 0.3 * (pid.Kd * rawD);
+
+  // optional safety clamp (prevents crazy spikes)
+  if (pid.D > 300) pid.D = 300;
+  if (pid.D < -300) pid.D = -300;
+
+  pid.previousError = pid.error;
+  pid.previousTime = currentTime;
 
   int eLeft = minSpeed - pid.P - pid.D;
   int eRight = minSpeed + pid.P + pid.D;
@@ -690,74 +701,86 @@ void findError01() {
   pid.error = 0;
 
 
-  if(!overFlow){
+  int filtered[16];
+
+for(int i = 0; i < sensorCount; i++){
+    if(sensorCal.calibratedValues[i] > LowerThreshold)
+        filtered[i] = sensorCal.calibratedValues[i];
+    else
+        filtered[i] = 0;
+}
+
+
+if(!overFlow){
     for (int i = 0; i < 7; i++) {
-      collectiveWeight += (PositionMultiplyer14[6 - i] * sensorCal.calibratedValues[6 - i]) + (PositionMultiplyer14[7 + i] * sensorCal.calibratedValues[9 + i]);
-      totalWeight += sensorCal.calibratedValues[6 - i] + sensorCal.calibratedValues[9 + i];
-      if (totalWeight > pid.totalWeightThreshold)
-        break;
-    }
+        collectiveWeight += (PositionMultiplyer14[6 - i] * filtered[6 - i]) +
+                            (PositionMultiplyer14[7 + i] * filtered[9 + i]);
 
-  }
+        totalWeight += filtered[6 - i] + filtered[9 + i];
 
-  else if(!overFlowDirection){
-    for(int i = 0; i<sensorCount-2; i++){
-      if(i<7){
-        collectiveWeight += PositionMultiplyer14[i] * sensorCal.calibratedValues[i];
-        totalWeight += sensorCal.calibratedValues[i];
-      }
-      if(i>6){
-        collectiveWeight += PositionMultiplyer14[i] * sensorCal.calibratedValues[i+2];
-        totalWeight += sensorCal.calibratedValues[i+2];
-      }
-      if (totalWeight > pid.totalWeightThreshold)
-        break;
+        if (totalWeight > pid.totalWeightThreshold)
+            break;
     }
-  }
+}
 
-  else{
-    for(int i = 13; i>=0; i--){
-      if(i<7){
-        collectiveWeight += PositionMultiplyer14[i] * sensorCal.calibratedValues[i];
-        totalWeight += sensorCal.calibratedValues[i];
-      }
-      if(i>6){
-        collectiveWeight += PositionMultiplyer14[i] * sensorCal.calibratedValues[i+2];
-        totalWeight += sensorCal.calibratedValues[i+2];
-      }
-      if (totalWeight > pid.totalWeightThreshold)
-        break;
+else if(!overFlowDirection){
+    for(int i = 0; i < sensorCount - 2; i++){
+        if(i < 7){
+            collectiveWeight += PositionMultiplyer14[i] * filtered[i];
+            totalWeight += filtered[i];
+        }
+        if(i > 6){
+            collectiveWeight += PositionMultiplyer14[i] * filtered[i + 2];
+            totalWeight += filtered[i + 2];
+        }
+        if (totalWeight > pid.totalWeightThreshold)
+            break;
     }
-  }
+}
+
+else{
+    for(int i = 13; i >= 0; i--){
+        if(i < 7){
+            collectiveWeight += PositionMultiplyer14[i] * filtered[i];
+            totalWeight += filtered[i];
+        }
+        if(i > 6){
+            collectiveWeight += PositionMultiplyer14[i] * filtered[i + 2];
+            totalWeight += filtered[i + 2];
+        }
+        if (totalWeight > pid.totalWeightThreshold)
+            break;
+    }
+}
 
 
 
   //stopConditionFinder;
-  if(!stopConditionTimerStarted){
-    theCollector = 0;
-    for(int i = 0; i<14; i++){
-      if(i<7)
-        theCollector += sensorCal.calibratedValues[i];
-      else
-        theCollector += sensorCal.calibratedValues[i+2];
+  // if(!stopConditionTimerStarted){
+  //   theCollector = 0;
+  //   for(int i = 0; i<14; i++){
+  //     if(i<7)
+  //       theCollector += sensorCal.calibratedValues[i];
+  //     else
+  //       theCollector += sensorCal.calibratedValues[i+2];
 
-      if(theCollector >= 13500)
-        stopCondition = true;
-      else
-        stopCondition = false;
-    }
-  }
+  //     if(theCollector >= 13500)
+  //       stopCondition = true;
+  //     else
+  //       stopCondition = false;
+  //   }
+  // }
 
   if(edgingCooldown){
     if (sensorCal.calibratedValues[0] > 850){
       if(millis()-lastEdgeUpdateTime>150){
-        pid.edgeCase = -2000;
+        pid.edgeCase = -3200;
         lastEdgeUpdateTime = millis();
       }
     }
     else if (sensorCal.calibratedValues[sensorCount-1] > 850){
       if(millis()-lastEdgeUpdateTime>150){
-        pid.edgeCase = 2000;
+        pid.edgeCase = 3200;
         lastEdgeUpdateTime = millis();
       }
     }
